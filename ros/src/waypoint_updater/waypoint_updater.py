@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 
 import rospy
+from std_msgs.msg import Int32
 from geometry_msgs.msg import PoseStamped
 from styx_msgs.msg import Lane, Waypoint
-
+import numpy as np
+from scipy.spatial import KDTree
 import math
 
 '''
@@ -21,8 +23,8 @@ as well as to verify your TL classifier.
 TODO (for Yousuf and Aaron): Stopline location for each traffic light.
 '''
 
-LOOKAHEAD_WPS = 200 # Number of waypoints we will publish. You can change this number
-
+LOOKAHEAD_WPS = 30 # change this to 30~50 if working on Udacity workspace
+MAX_DECEL = 1.0
 
 class WaypointUpdater(object):
     def __init__(self):
@@ -32,25 +34,107 @@ class WaypointUpdater(object):
         rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
 
         # TODO: Add a subscriber for /traffic_waypoint and /obstacle_waypoint below
-
+        rospy.Subscriber('/traffic_waypoint', Int32, self.traffic_cb)
 
         self.final_waypoints_pub = rospy.Publisher('final_waypoints', Lane, queue_size=1)
 
         # TODO: Add other member variables you need below
+        self.pose = None
+        self.base_waypoints = None
+        self.waypoints_xy_coords = None
+        self.waypoint_tree = None
+        self.stopline_wp_idx = -1
 
-        rospy.spin()
+        self.loop()
+
+    def loop(self):
+        rate = rospy.Rate(50)
+        while not rospy.is_shutdown():
+            if self.pose and self.base_waypoints:
+                self.publish_waypoints()
+                """ below are the partial waypoint updater implementation (step1)
+                # call subroutine to get closest waypoint index
+                closest_wp_idx = self.get_closest_wp_idx()
+                # publish waypoints
+                self.publish_waypoints(closest_wp_idx)
+                """
+            rate.sleep()
+
+    def get_closest_wp_idx(self):
+        ego_x = self.pose.pose.position.x
+        ego_y = self.pose.pose.position.y
+        closest_idx = self.waypoint_tree.query([ego_x, ego_y], 1)[1]
+
+        # check if the closest point is behind or ahead of vehicle
+        closest_coord = self.waypoints_xy_coords[closest_idx]
+        prev_coord = self.waypoints_xy_coords[closest_idx - 1]
+
+        # dot product of vectors should be positive if closest point is ahead
+        cl_vect = np.array(closest_coord)
+        prev_vect = np.array(prev_coord)
+        pos_vect = np.array([ego_x, ego_y])
+
+        dot_prod_val = np.dot(cl_vect - prev_vect, cl_vect - pos_vect)
+
+        # change output to next point if not ahead
+        if dot_prod_val < 0:
+            closest_idx = (closest_idx + 1) % len(self.waypoints_xy_coords)
+
+        return closest_idx
+
+    def publish_waypoints(self):
+        """ below are the partial waypoint updater implementation (step1)
+        lane = Lane()
+        lane.header = self.base_waypoints.header
+        lane.waypoints = self.base_waypoints.waypoints[closest_idx: closest_idx + LOOKAHEAD_WPS]
+        self.final_waypoints_pub.publish(lane)
+        """
+        final_lane = self.generate_lane()
+        self.final_waypoints_pub.publish(final_lane)
+
+    def generate_lane(self):
+        lane = Lane()
+
+        closest_wp_idx = self.get_closest_wp_idx()
+        farthest_wp_idx_default = closest_wp_idx + LOOKAHEAD_WPS
+        base_waypoints_default = self.base_waypoints.waypoints[closest_wp_idx: farthest_wp_idx_default]
+
+        if self.stopline_wp_idx == -1 or (self.stopline_wp_idx >= farthest_wp_idx_default):
+            lane.waypoints = base_waypoints_default
+        else:
+            lane.waypoints = self.stop_at_light_waypoints(base_waypoints_default, closest_wp_idx)
+
+        return lane
+
+    def stop_at_light_waypoints(self, base_wps, closest_idx):
+        stop_at_light_wps = []
+        for i, wp in enumerate(base_wps):
+            p = Waypoint()
+            p.pose = wp.pose
+            stop_idx = max(self.stopline_wp_idx - closest_idx - 3, 0)
+            dist = self.distance(base_wps, i, stop_idx)
+            vel = math.sqrt(2 * MAX_DECEL * dist)
+            if vel < 1.:
+                vel = 0
+            p.twist.twist.linear.x = min(vel, wp.twist.twist.linear.x)
+            stop_at_light_wps.append(p)
+        return stop_at_light_wps
 
     def pose_cb(self, msg):
-        # TODO: Implement
-        pass
+        self.pose = msg
 
     def waypoints_cb(self, waypoints):
-        # TODO: Implement
-        pass
+        self.base_waypoints = waypoints
+        if not self.waypoints_xy_coords:
+            # construct a KDTree for finding the closest waypoint faster.
+            # (O(logN) instead of O(N))
+            self.waypoints_xy_coords = [[waypoint.pose.pose.position.x, waypoint.pose.pose.position.y]\
+                                        for waypoint in waypoints.waypoints]
+            self.waypoint_tree = KDTree(self.waypoints_xy_coords)
 
     def traffic_cb(self, msg):
         # TODO: Callback for /traffic_waypoint message. Implement
-        pass
+        self.stopline_wp_idx = msg.data
 
     def obstacle_cb(self, msg):
         # TODO: Callback for /obstacle_waypoint message. We will implement it later
