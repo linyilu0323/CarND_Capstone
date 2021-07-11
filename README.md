@@ -52,13 +52,13 @@ As the very first step, it will be necessary to implement a basic part of the `w
 
   ![Waypoint Vector Illustration](imgs/wp_ahead_v_behind.png)
 
-  As illustrated in above figure, we can construct two vectors, both ends at the "closest waypoint" from the KDtree query, with v1 starting from the one previous entry in the waypoint list, and v2 starting from the vehicle position. 
+  As illustrated in above figure, we can construct two vectors, both ends at the "closest waypoint" from the KDtree query, with `v1` starting from the one previous entry in the waypoint list, and `v2` starting from the vehicle position. 
 
   The dot product can be calculated by using the `numpy.dot` function.
 
   
 
-- **Publishing the required number of waypoints: **
+- **Publishing the required number of waypoints:**
 
   Once we have the index of waypoint that is closest and is ahead of vehicle, we can simply publish the desired number of waypoints by outputing a sliced list of `base_waypoints`.  
 
@@ -78,11 +78,40 @@ It is important to only publish those commands when driver-by-wire is enabled.
 
 #### 3. Traffic Light Detection
 
+In the traffic light detection module, we need to find the closest traffice light, determine its color, determine the stop line if it's red, and publish  `/traffic_waypoint` information. In this attempt, I didn't implement using camera image to detect traffic light state using a classifier, the traffic light state comes from the simulator.
+
 
 
 #### 4. Waypoint Updater Node - with Traffic Light Info
 
+To finalize the project and let the car stop at traffic light when it's red. We need to add a few lines of code to utilize the `/traffic_waypoint` information from the previous step.
 
+When a red light is detected, we will need to publish a new set of waypoint to allow the vehicle to decelerate smoothly and stop at the stop line. The velocity of a constant deceleration rate can be described as: `vel = sqrt(2 * a_DECEL * dist)`
+
+where, `a_DECEL` is the deceleration in m/s2, and `dist` is the distance from current position to the stop position. As the equation suggests, the velocity will decay and approach zero when getting closer to the red light stop line. We will also keep a zero velocity for all waypoints that are beyond the stop line, and keep the speed limit as the ceiling. The overall expression of velocity vs distance would be:
+
+```pseudocode
+if dist < 0:
+	vel = 0
+else:
+	vel = sqrt(2 * a_DECEL * dist)
+	
+return min(vel, max_sp_lim)
+```
+
+With the velocity value for each waypoint updated, the car would then stop at the red light and resume driving once the light turns green, a snippet of the simulator result is shown below.
 
 ![wp_updater_full_impl](imgs/wp_updater_full_impl.gif)
+
+
+
+### Future Improvements
+
+#### 1. Implement Traffic Light Classifier
+
+Use the camera image from the car to know if the vehicle is approaching a red light, instead of relying on broadcasted ground truth, would make this project much more complete. The TL detection and classification module would need to first segment camera image and find the traffic light (object detection), then run the "sliced" traffic light image through a classifier to get the traffic light state.
+
+#### 2. Fine Tune Vehicle Behavior at Traffic Light
+
+More similar to a human driver, it would be better if the vehicle can accelerate more aggresively when traffic light turns green, however we need to still keep in mind the acceleration, jerk, and make sure the vehicle travels below the speed limit.
 
